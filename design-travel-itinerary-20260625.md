@@ -109,7 +109,7 @@ Place {
   lng: number
   category: enum       // MUSEUM | RESTAURANT | SCENIC_SPOT | ATTRACTION | OTHER
   opening_hours: OpeningHours[]
-  ticket_price: string | null
+  price_level: 0 | 1 | 2 | 3 | 4 | null  // from Google Places API; 0=Free, 1=$, 2=$$, 3=$$$, 4=$$$$
   dwell_time_minutes: number  // system default, user-overridable
 }
 
@@ -117,7 +117,8 @@ Itinerary {
   days: Day[]
   total_places: number
   generated_at: timestamp
-  share_token: string  // UUID, read-only URL, no login, 30-day TTL
+  share_token: string   // UUID v4, read-only URL, no login, 30-day TTL
+  user_id: UUID | null  // NULL in v1 (anonymous); populated in Phase 4 when auth added
 }
 
 Day {
@@ -141,9 +142,8 @@ Day {
 4. 失效連結返回 404 頁面，顯示「此行程連結已過期」
 
 **持久化層（Persistence）：**
-- 資料庫：Supabase Postgres（儲存 Itinerary + Place 快取 + share_token）
-- 快取：Upstash Redis（Vercel serverless 環境不支援 in-memory 持久快取）
-  - key: `place:{place_id}`, TTL: 24 小時
+- 資料庫：Supabase Postgres — 唯一持久化層（儲存 itineraries, places cache, share_token）
+- Place 快取：Supabase `places` table（`SELECT WHERE id = ANY($1)`，batch lookup），TTL 24h 由 pg_cron 清理
 - Share token TTL 清理：Supabase pg_cron 或每次查詢時檢查 `expires_at` 欄位
 
 ## Algorithm Decisions (MVP)
@@ -170,8 +170,11 @@ Day {
 ## Error Handling & Degraded State
 
 - **Places API 找不到地點**：顯示地點名稱 + 警告標記「資訊待補充」，允許用戶手動填入時間/票價
-- **API quota 耗盡**：顯示系統通知，該地點 fallback 到 OpenStreetMap Nominatim（座標查詢）
+- **API 403 / 401（key 無效或超出配額硬上限）**：server 返回 500 + 用戶訊息「系統配置錯誤，請稍後再試」；後端 `console.error` 記錄（v2 接 Sentry alert）
+- **API quota 耗盡（429 rate limit）**：顯示系統通知，該地點 fallback 到 OpenStreetMap Nominatim（座標查詢）
 - **資料過時**：在資訊卡上顯示「資料來自 Google，請出發前確認」免責聲明
+- **雙重送出（duplicate submit）**：送出按鈕在請求進行中 disabled；server side 以 place_list hash 作為 idempotency key，重複請求返回正在進行的結果
+- **XSS 防護**：所有來自 Google Places API 的字串（name, address, 等）一律透過 React JSX 渲染，禁止使用 `dangerouslySetInnerHTML`
 
 ## Open Questions
 
@@ -414,18 +417,131 @@ Synthesized from design review findings. Run with Claude Code or Codex; checkbox
   - Files: `components/ShareButton.tsx`
   - Verify: button text resets after 2s; fallback modal shows URL if Clipboard API unsupported
 
+## CEO Review (from /autoplan 2026-06-25)
+
+### Step 0 Analysis
+
+**Mode: SELECTIVE EXPANSION.** Approach C confirmed (MVP + sharing). All 4 premises confirmed by user.
+
+**Dream State Delta:**
+```
+CURRENT STATE               THIS PLAN (v1)              12-MONTH IDEAL (v3)
+Google Maps + manual   →    Paste list + auto-sort   →  AI-assisted planning
+3-5 hours planning         < 15 min planning             Collaborative trips
+No sharing                 UUID share link (30d)         Saved + social sharing
+```
+
+**CEO Dual Voices Consensus (2026-06-25):**
+```
+  Dimension                          Claude  Codex  Consensus
+  ────────────────────────────────── ─────── ────── ──────────
+  1. Premises valid?                 WARN    WARN   DISAGREE (validation gap)
+  2. Right problem to solve?         WARN    WARN   DISAGREE (sorting vs discovery)
+  3. Scope calibration correct?      OK      WARN   DISAGREE (sharing scope)
+  4. Alternatives explored?          OK      OK     CONFIRMED
+  5. Competitive/market risks?       WARN    WARN   CONFIRMED (both flag Google/ChatGPT)
+  6. 6-month trajectory sound?       WARN    WARN   CONFIRMED (both warn on risk)
+```
+
+### CEO Findings (auto-decided via /autoplan)
+
+**CEO-F1 (HIGH) — Data model inconsistency: ticket_price still in schema body**
+The original Data Model section shows `ticket_price: string | null` but Engineering Decisions (from eng-review) already resolved: "Drop ticket_price — use price_level (0-4)". The schema body needs updating.
+Auto-decided (P5): The plan body should reflect the resolved decision. Cleanup item before implementation.
+
+**CEO-F2 (HIGH) — Missing error case: Google Places API 403**
+What happens when the API key is invalid or quota has hard-stopped (not just rate-limited)? Currently unspecified.
+Auto-decided (P1): Add to Error Handling: `403/401 from Places API → server returns 500 with message "系統配置錯誤，請稍後再試" + trigger admin alert (console.error in v1, Sentry in v2)`.
+
+**CEO-F3 (HIGH) — XSS: place names from Google Places are untrusted input**
+Place names should never be inserted via `dangerouslySetInnerHTML`. Next.js JSX escapes by default — this is a "don't violate" rule, not a "build" task.
+Auto-decided (P1): Add to plan — explicitly prohibit `dangerouslySetInnerHTML` for any API-sourced string. React default escaping is sufficient.
+
+**CEO-F4 (MEDIUM) — Double-submit prevention missing**
+User clicks "排程最佳路線" twice → two concurrent optimization calls, two itineraries created.
+Auto-decided (P5): Disable submit button while request is in-flight (UI); server-side: idempotency key (place_list hash) to detect and return the in-progress request.
+
+**CEO-F5 (MEDIUM) — itineraries table missing user_id for Phase 4 migration safety**
+When auth is added in Phase 4, linking itineraries to users requires an ALTER TABLE on live data. Design `user_id UUID NULL REFERENCES users(id)` into the schema from day 1.
+Auto-decided (P2): Add `user_id UUID NULL` to the itineraries table schema. One column now prevents a painful migration later.
+
+**CEO-F6 (LOW) — Upstash Redis still mentioned in original Data Model section**
+Engineering Decisions already dropped Upstash Redis ("Supabase is sole place cache"). The original Data Model section still mentions it in the Persistence subsection.
+Auto-decided (P5): Remove Upstash Redis reference from Data Model. Cleanup item.
+
+### NOT in Scope (CEO — no cherry-picks accepted)
+
+All expansion candidates auto-deferred (P3 — stay lean until validation):
+- Rate limiting (server-side per-IP): Phase 5 — in TODOS T2
+- PostHog analytics: v1.1 — when first external users arrive
+- Opening hours constraint scheduling: v2
+- B-class user discovery / AI recommendations: v2
+- Monetization model: defer until 1 user pays
+
+### What Already Exists
+
+Zero existing application code. Greenfield.
+
+### CEO Failure Modes Registry
+
+| Failure Mode | Likelihood | Impact | Plan Mitigates? |
+|-------------|-----------|--------|----------------|
+| Google Places API key revoked | Low | Critical | T1 (ToS check); partial |
+| No external users find product | Med | Critical | "Assignment" section; partial |
+| Google/ChatGPT ships same feature | Med | High | No explicit moat defined |
+| API cost runaway before quota cap | Med | High | T2 (budget alert); deferred |
+| Users only use it once (no retention) | Med | Med | Share link; partial |
+| Opening hours data wrong for 30% of places | High | Med | Disclaimer on cards; OK |
+
+### Cross-Phase Themes (CEO — both models flagged)
+
+1. **Competitive risk from Google is unaddressed** — The plan lists Wanderlog/MindTrip as competitors but not Google Maps AI, ChatGPT "plan a trip", or Apple Maps. The only durable moat is a workflow insight Google won't copy. Consider adding a "Why Google won't do this well" paragraph to the plan.
+
+2. **Validation must happen in parallel with building, not after** — Both models flag that 6-10 weeks of engineering before any external validation is high-risk. The plan's "Assignment" (find 5 strangers) should ideally happen before Phase 3 UI work begins, not after the full product ships.
+
+3. **Distribution needs a mechanism, not a channel** — "Post in PTT/Dcard" is a manual tactic, not a repeatable loop. The share link IS the distribution mechanism (viral via itinerary sharing). Make this explicit: every shared itinerary is an acquisition event.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
-| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
-| Codex Review | `/codex review` | Independent 2nd opinion | 1 | issues_found | 9 findings surfaced, 3 resolved (CT1-CT3), 6 noted in TODOS |
+| CEO Review | `/autoplan` | Scope & strategy | 1 | issues_found | 6 findings (F1-F6); 3 cross-phase themes; no User Challenges |
+| Codex Review | `/codex review` | Independent 2nd opinion | 2 | issues_found | CEO voice: 9 strategic concerns surfaced |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | issues_open | 10 issues found, all resolved; 3 critical gaps |
 | Design Review | `/plan-design-review` | UI/UX gaps | 1 | clean | score: 3/10 → 9/10, 14 decisions made |
-| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | N/A (consumer app, not dev tool) |
 
-**CROSS-MODEL:** Both Claude review and Codex outside voice agreed on: rate limiting as pre-public blocker, Google caching ToS risk, ticket_price data gap, travel time missing from day count formula.
+**CROSS-MODEL (CEO + Eng + Design voices):** Google caching ToS risk (T1, pre-blocking), rate limiting gap (T2, pre-public), competitive risk from Google/ChatGPT (unaddressed moat), validation sequencing (build vs validate), distribution mechanism (share link = viral loop).
 
-**VERDICT:** ENG REVIEW COMPLETE (PLAN) + DESIGN REVIEW COMPLETE — 14 UI decisions locked, 9 implementation tasks, 2 design TODOs added. Run /ship when code is ready.
+**DECISION AUDIT TRAIL:**
+
+| # | Phase | Decision | Classification | Principle | Rationale | Rejected |
+|---|-------|----------|----------------|-----------|-----------|---------|
+| 1 | CEO | Mode = SELECTIVE EXPANSION | Mechanical | P3/P5 | Hold Approach C scope; no cherry-picks needed | SCOPE EXPANSION |
+| 2 | CEO | Accept all 4 premises | Mechanical | P6 | All reasonable; user confirmed | None |
+| 3 | CEO | CEO-F1: flag ticket_price inconsistency | Mechanical | P5 | Plan body must match resolved decisions | — |
+| 4 | CEO | CEO-F2: add 403 error case | Mechanical | P1 | Completeness — critical error path | — |
+| 5 | CEO | CEO-F3: XSS prohibition | Mechanical | P1 | Security, default React escaping sufficient | — |
+| 6 | CEO | CEO-F4: double-submit prevention | Mechanical | P5 | Idempotency key + UI disable | — |
+| 7 | CEO | CEO-F5: user_id in itineraries | Mechanical | P2 | Blast radius — prevents live migration pain in Phase 4 | — |
+| 8 | CEO | CEO-F6: remove Upstash mention | Mechanical | P5 | Cleanup — Upstash dropped in eng review | — |
+| 9 | CEO | No cherry-picks accepted | Mechanical | P3 | Lean until validation | All expansion candidates |
+
+**VERDICT:** AUTOPLAN COMPLETE — APPROVED TO BUILD (2026-06-25)
+- CEO REVIEW: 6 findings applied to plan body, 9 decision-audit entries, 3 cross-phase themes noted
+- ENG REVIEW: 10 issues resolved, 3 critical gaps tracked in TODOS (T1=P0, T2/T5=P1)
+- DESIGN REVIEW: 9/10, 14 UI decisions locked, 2 design TODOs (T4, T5)
+- FINAL GATE: APPROVED — all taste decisions acknowledged (validation sequencing, competitive moat, distribution)
+
+**TASTE DECISIONS ACCEPTED AT FINAL GATE:**
+- TASTE-A: Build-first then validate (Approach C) — founder confirms this is the right sequence
+- TASTE-B: Competitive moat (Google/ChatGPT risk) — accepted without moat articulation; revisit if Google ships Taiwan trip planning
+- TASTE-C: Distribution via share link (viral loop) — implicit; no action needed
+
+**IMMEDIATE NEXT STEPS:**
+1. Resolve T1 (Google Maps caching ToS) before writing any DB schema code
+2. Set T2 (GCP budget alerts + quota cap) before any public sharing
+3. Create DESIGN.md (T4) before starting Phase 3 UI work
+4. Start building: scaffold Next.js 15 + Supabase + shadcn/ui (Phase 1)
 
 NO UNRESOLVED DECISIONS
