@@ -7,7 +7,7 @@ import {
 } from "@dnd-kit/sortable";
 import { useDroppable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { GripVertical } from "lucide-react";
+import { GripVertical, Route } from "lucide-react";
 import type { Day, Visit, UserCategory } from "@/types";
 import { PlaceCard } from "./PlaceCard";
 import { DAY_COLORS } from "@/lib/constants";
@@ -19,6 +19,7 @@ interface DaySectionProps {
   onDwellChange?: (dayNumber: number, placeId: string, minutes: number) => void;
   onCategoryChange?: (dayNumber: number, placeId: string, category: UserCategory) => void;
   onLockToggle?: (dayNumber: number, placeId: string, locked: boolean) => void;
+  onAutoArrange?: (dayNumber: number) => void;
   readonly?: boolean;
 }
 
@@ -84,7 +85,7 @@ function SortableVisit({
   );
 }
 
-export function DaySection({ day, start_date, isEstimated, onDwellChange, onCategoryChange, onLockToggle, readonly }: DaySectionProps) {
+export function DaySection({ day, start_date, isEstimated, onDwellChange, onCategoryChange, onLockToggle, onAutoArrange, readonly }: DaySectionProps) {
   const color = DAY_COLORS[(day.day_number - 1) % DAY_COLORS.length];
 
   const startDay = start_date
@@ -100,17 +101,26 @@ export function DaySection({ day, start_date, isEstimated, onDwellChange, onCate
       {/* Day header */}
       <div className="flex items-center gap-3 mb-4">
         <div
-          className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-semibold"
+          className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-semibold shrink-0"
           style={{ backgroundColor: color }}
         >
           {day.day_number}
         </div>
-        <div>
+        <div className="flex-1 min-w-0">
           <h2 className="font-semibold text-foreground">第 {day.day_number} 天</h2>
           <p className="text-xs text-muted-foreground">
             {day.visits.length} 個景點 · 移動約 {day.total_travel_minutes} 分鐘
           </p>
         </div>
+        {onAutoArrange && day.visits.length >= 2 && (
+          <button
+            onClick={() => onAutoArrange(day.day_number)}
+            title="自動安排最短路線"
+            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
+          >
+            <Route className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Sortable visits */}

@@ -135,6 +135,36 @@
 
 ---
 
+## T17 — Add 2-opt post-pass to tspWithLockAnchors
+**Priority:** P3
+**What:** After nearest-neighbor orders each free segment in `tspWithLockAnchors`, run a 2-opt improvement pass on each segment to reduce total distance by ~10-15% for segments with 5+ visits.
+**Why:** The optimizer already uses NN+2-opt for initial scheduling. Auto-arrange uses NN-only. For large free segments (5+ visits), 2-opt is a meaningful quality improvement.
+**Context:** `optimizer.ts` (lines 96-124) has a 2-opt implementation typed for `Place[]`. Adaptation for `Visit[]` is straightforward: extract the comparison key to `visit.place.lat/lng`. Ship after `tspWithLockAnchors` is stable.
+**Blocked by:** Nothing
+**Depends on:** Smart Place Addition + TSP Auto-Arrange (this PR)
+
+---
+
+## T18 — Consolidate isEstimated into single state
+**Priority:** P3
+**What:** Remove the separate `[isEstimated, setIsEstimated]` React state in `page.tsx`. Read `itinerary.isEstimated` directly from the itinerary state object. Remove the separate `isEstimated-${id}` sessionStorage key.
+**Why:** The dual-state architecture required a manual bug fix in the Smart Add PR (setIsEstimated + sessionStorage update). Any future mutation that forgets to update the separate state creates a silent display bug.
+**Context:** The separate state was introduced early and predates the `itinerary.isEstimated` field. Consolidating eliminates the bug class entirely. One-file refactor.
+**Blocked by:** Smart Place Addition + TSP Auto-Arrange (this PR) — needs to be bug-patched first
+**Depends on:** Nothing after this PR
+
+---
+
+## T19 — Add delete/remove visit UI
+**Priority:** P2
+**What:** Add a delete button (X or trash icon) to each PlaceCard that removes the visit from `day.visits[]`, recascades times, and persists. Guard: don't allow deleting the last visit in a day (or allow it and remove the day).
+**Why:** Smart Add makes it easy to add wrong places. Without delete, the only recovery is going back to the home page and regenerating the entire itinerary.
+**Context:** Pairs naturally with Smart Add. Recommend shipping in the same session or the next one. Day removal logic: if `day.visits.length === 1` after deletion, either remove the day entirely or show "（無景點）" placeholder (which DaySection already handles).
+**Blocked by:** Nothing
+**Depends on:** Smart Place Addition + TSP Auto-Arrange (this PR) motivates the need
+
+---
+
 ## T16 — Verify editorialSummary FieldMask doesn't change Places API billing SKU
 **Priority:** P3
 **What:** Confirm that adding `places.editorialSummary` to the Places API (New) FieldMask doesn't trigger a more expensive billing tier (e.g., "Atmosphere" vs "Basic"). Check GCP Places API pricing page for FieldMask → SKU mapping.

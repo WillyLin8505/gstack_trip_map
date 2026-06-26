@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Share2, ArrowLeft, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Share2, ArrowLeft, Loader2, AlertCircle, CheckCircle2, Plus } from "lucide-react";
 import {
   DndContext,
   DragEndEvent,
@@ -19,7 +19,16 @@ import { DAY_COLORS } from "@/lib/constants";
 import { PlaceCard } from "@/components/PlaceCard";
 import { sortableKeyboardCoordinates, arrayMove } from "@dnd-kit/sortable";
 import type { ScheduledItinerary, UserCategory, Visit } from "@/types";
-import { addMinutes, overstayWarningForVisit } from "@/lib/utils";
+import {
+  addMinutes,
+  haversineKm,
+  travelMinutes,
+  openingWarningForVisit,
+  overstayWarningForVisit,
+  tspWithLockAnchors,
+  mealWindowSwap,
+  recascadeTimes,
+} from "@/lib/utils";
 import { TRAVEL_BUFFER_MINUTES } from "@/lib/constants";
 import { DaySection } from "@/components/DaySection";
 import { ItineraryMap } from "@/components/ItineraryMap";
@@ -36,6 +45,12 @@ export default function ResultsPage() {
   const [isEstimated, setIsEstimated] = useState(false);
   const [clampedToast, setClampedToast] = useState<string | null>(null);
   const [activeVisit, setActiveVisit] = useState<{ visit: Visit; dayColor: string } | null>(null);
+
+  const [addPanelOpen, setAddPanelOpen] = useState(false);
+  const [addInput, setAddInput] = useState("");
+  const [addLoading, setAddLoading] = useState(false);
+  const [addFeedback, setAddFeedback] = useState<{ added: number; skipped: string[] } | null>(null);
+  const [addError, setAddError] = useState<string | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -250,6 +265,157 @@ export default function ResultsPage() {
     }
   }
 
+  async function handleAddPlaces() {
+    if (!itinerary || !addInput.trim()) return;
+    setAddLoading(true);
+    try {
+      setAddError(null);
+      setAddFeedback(null);
+      const res = await fetch("/api/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ place_list: addInput, city: itinerary.city }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setAddError(err.error ?? "解析失敗，請稍後再試");
+        return;
+      }
+      // Snapshot AFTER await — React state may have changed during the fetch
+      const { places, warnings: apiWarnings, detectedCity } = await res.json();
+      const snapshot = itinerary;
+      if (!snapshot) return;
+
+      if (!Array.isArray(places) || places.length === 0) {
+        setAddError("找不到任何地點，請確認名稱是否正確");
+        return;
+      }
+
+      const warnings: string[] = [...(apiWarnings ?? [])];
+
+      // City mismatch — API already returns detectedCity
+      if (detectedCity && detectedCity !== snapshot.city) {
+        warnings.unshift(`地點可能不屬於 ${snapshot.city}，請確認`);
+      }
+
+      // Compute day centroids from snapshot
+      const centroids = snapshot.days
+        .map((d) => {
+          if (d.visits.length === 0) return null;
+          const avgLat = d.visits.reduce((s, v) => s + v.place.lat, 0) / d.visits.length;
+          const avgLng = d.visits.reduce((s, v) => s + v.place.lng, 0) / d.visits.length;
+          return { dayNumber: d.day_number, lat: avgLat, lng: avgLng };
+        })
+        .filter(Boolean) as { dayNumber: number; lat: number; lng: number }[];
+
+      if (centroids.length === 0) return;
+
+      const startDayOfWeek = snapshot.start_date
+        ? new Date(snapshot.start_date + "T12:00:00").getDay()
+        : new Date().getDay();
+
+      let clientSkipped = 0;
+      const days = snapshot.days.map((d) => ({ ...d, visits: [...d.visits] }));
+
+      for (const place of places) {
+        // Places with no resolved coordinates fall back to 0,0 in places.ts —
+        // centroid distance would be ~13,000km → wrong day assignment
+        if (place.lat === 0 && place.lng === 0) {
+          clientSkipped++;
+          warnings.push(`${place.name} 無座標資料，已略過`);
+          continue;
+        }
+        if (days.some((d) => d.visits.some((v) => v.place.id === place.id))) {
+          clientSkipped++;
+          continue;
+        }
+
+        const best = centroids.reduce(
+          (prev, c) => {
+            const dist = haversineKm(place.lat, place.lng, c.lat, c.lng);
+            return dist < prev.dist ? { dayNumber: c.dayNumber, dist } : prev;
+          },
+          { dayNumber: centroids[0].dayNumber, dist: Infinity }
+        );
+
+        const dayIdx = days.findIndex((d) => d.day_number === best.dayNumber);
+        const day = days[dayIdx];
+        const visitDayOfWeek = (startDayOfWeek + 6 + (day.day_number - 1)) % 7;
+        const prevVisit = day.visits[day.visits.length - 1];
+        const travelMins = prevVisit
+          ? travelMinutes(prevVisit.place.lat, prevVisit.place.lng, place.lat, place.lng)
+          : 0;
+        const arrival = prevVisit
+          ? addMinutes(prevVisit.departure_time, travelMins + TRAVEL_BUFFER_MINUTES)
+          : "09:00";
+        const departure = addMinutes(arrival, place.dwell_minutes);
+        days[dayIdx].visits.push({
+          place,
+          arrival_time: arrival,
+          departure_time: departure,
+          travel_minutes_from_prev: travelMins,
+          opening_warning: openingWarningForVisit(place.weekday_descriptions, visitDayOfWeek, arrival),
+          overstay_warning: overstayWarningForVisit(place.opening_hours, visitDayOfWeek, departure),
+          locked: false,
+        });
+      }
+
+      // Update day totals — DaySection displays these; stale after mutation
+      for (const day of days) {
+        day.total_travel_minutes = day.visits
+          .slice(1)
+          .reduce((s, v) => s + v.travel_minutes_from_prev, 0);
+        day.total_dwell_minutes = day.visits.reduce((s, v) => s + v.place.dwell_minutes, 0);
+      }
+
+      persist({ ...snapshot, days, isEstimated: true });
+
+      // page.tsx has a separate isEstimated React state and its own sessionStorage key;
+      // persist() only updates itinerary.isEstimated — must update both
+      setIsEstimated(true);
+      sessionStorage.setItem(`isEstimated-${params.id}`, "true");
+
+      const allSkipped =
+        clientSkipped > 0
+          ? [...warnings, `${clientSkipped} 個地點已存在於行程中或無座標，已略過`]
+          : warnings;
+      setAddFeedback({ added: places.length - clientSkipped, skipped: allSkipped });
+      setAddInput("");
+    } finally {
+      setAddLoading(false);
+    }
+  }
+
+  function handleAutoArrange(dayNumber: number) {
+    if (!itinerary) return;
+    const dayIdx = itinerary.days.findIndex((d) => d.day_number === dayNumber);
+    if (dayIdx === -1) return;
+    const day = itinerary.days[dayIdx];
+    if (day.visits.length < 2) return;
+
+    const startDayOfWeek = itinerary.start_date
+      ? new Date(itinerary.start_date + "T12:00:00").getDay()
+      : new Date().getDay();
+    const visitDayOfWeek = (startDayOfWeek + 6 + (day.day_number - 1)) % 7;
+
+    const arranged = tspWithLockAnchors([...day.visits]);
+    const mealed = mealWindowSwap(arranged);
+    const newVisits = recascadeTimes(mealed, visitDayOfWeek);
+
+    const days = itinerary.days.map((d, i) => {
+      if (i !== dayIdx) return d;
+      return {
+        ...d,
+        visits: newVisits,
+        total_travel_minutes: newVisits
+          .slice(1)
+          .reduce((s, v) => s + v.travel_minutes_from_prev, 0),
+        total_dwell_minutes: newVisits.reduce((s, v) => s + v.place.dwell_minutes, 0),
+      };
+    });
+    persist({ ...itinerary, days });
+  }
+
   if (!itinerary) {
     return (
       <main className="min-h-screen flex items-center justify-center">
@@ -271,7 +437,7 @@ export default function ResultsPage() {
       <div className="flex-1 overflow-y-auto min-w-0">
         <main className="px-4 py-8 max-w-2xl mx-auto">
           {/* Top bar */}
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between mb-4">
             <button
               onClick={() => router.push("/")}
               className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -280,21 +446,86 @@ export default function ResultsPage() {
               重新規劃
             </button>
 
-            <button
-              onClick={handleShare}
-              disabled={sharing}
-              className="flex items-center gap-1.5 text-sm font-medium text-accent hover:opacity-80 transition-opacity disabled:opacity-50"
-            >
-              {sharing ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : copied ? (
-                <CheckCircle2 className="w-4 h-4" />
-              ) : (
-                <Share2 className="w-4 h-4" />
-              )}
-              {copied ? "已複製連結" : "分享行程"}
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => { setAddPanelOpen(o => !o); setAddFeedback(null); setAddError(null); }}
+                className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                新增地點
+              </button>
+
+              <button
+                onClick={handleShare}
+                disabled={sharing}
+                className="flex items-center gap-1.5 text-sm font-medium text-accent hover:opacity-80 transition-opacity disabled:opacity-50"
+              >
+                {sharing ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : copied ? (
+                  <CheckCircle2 className="w-4 h-4" />
+                ) : (
+                  <Share2 className="w-4 h-4" />
+                )}
+                {copied ? "已複製連結" : "分享行程"}
+              </button>
+            </div>
           </div>
+
+          {/* Smart Add panel */}
+          {addPanelOpen && (
+            <div className="mb-6 rounded-lg border border-border bg-card p-4">
+              <textarea
+                value={addInput}
+                onChange={(e) => setAddInput(e.target.value)}
+                placeholder={"貼上地點名稱，每行一個\n例如：\n台北101\n大安森林公園\n鼎泰豐"}
+                rows={4}
+                className="w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-50"
+                disabled={addLoading}
+              />
+              {addError && (
+                <p className="mt-2 flex items-center gap-1 text-xs text-red-600">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  {addError}
+                </p>
+              )}
+              {addFeedback && (
+                <div className="mt-2 space-y-1">
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    {addFeedback.added > 0 && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 font-medium text-emerald-700">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        已加入 {addFeedback.added} 個地點
+                      </span>
+                    )}
+                    {addFeedback.skipped.length > 0 && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-0.5 text-amber-700">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        略過 {addFeedback.skipped.length} 項
+                      </span>
+                    )}
+                  </div>
+                  {addFeedback.skipped.length > 0 && (
+                    <div className="space-y-0.5">
+                      {addFeedback.skipped.map((w, i) => (
+                        <p key={i} className="text-xs text-muted-foreground">• {w}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="mt-3 flex justify-end">
+                <button
+                  onClick={handleAddPlaces}
+                  disabled={addLoading || !addInput.trim()}
+                  className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {addLoading && <Loader2 className="w-4 h-4 animate-spin" />}
+                  加入行程
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Title */}
           <div className="mb-6">
@@ -337,6 +568,7 @@ export default function ResultsPage() {
                 onDwellChange={handleDwellChange}
                 onCategoryChange={handleCategoryChange}
                 onLockToggle={handleLockToggle}
+                onAutoArrange={handleAutoArrange}
               />
             ))}
             <DragOverlay dropAnimation={null}>
