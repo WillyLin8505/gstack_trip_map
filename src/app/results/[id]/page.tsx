@@ -3,7 +3,17 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Share2, ArrowLeft, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
-import type { ScheduledItinerary, Visit } from "@/types";
+import {
+  DndContext,
+  DragEndEvent,
+  closestCorners,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import { sortableKeyboardCoordinates, arrayMove } from "@dnd-kit/sortable";
+import type { ScheduledItinerary } from "@/types";
 import { DaySection } from "@/components/DaySection";
 import { ItineraryMap } from "@/components/ItineraryMap";
 
@@ -18,6 +28,11 @@ export default function ResultsPage() {
 
   const [isEstimated, setIsEstimated] = useState(false);
   const [clampedToast, setClampedToast] = useState<string | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
 
   useEffect(() => {
     const raw = sessionStorage.getItem(`itinerary-${params.id}`);
@@ -53,16 +68,62 @@ export default function ResultsPage() {
     return () => clearTimeout(t);
   }, [clampedToast]);
 
-  function handleReorder(dayNumber: number, newVisits: Visit[]) {
-    if (!itinerary) return;
-    const updated = {
-      ...itinerary,
-      days: itinerary.days.map((d) =>
-        d.day_number === dayNumber ? { ...d, visits: newVisits } : d
-      ),
-    };
+  function persist(updated: ScheduledItinerary) {
     setItinerary(updated);
     sessionStorage.setItem(`itinerary-${params.id}`, JSON.stringify(updated));
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    if (!itinerary) return;
+    const { active, over } = event;
+    if (!over) return;
+
+    const activeId = active.id as string;
+    const overId = over.id as string;
+    if (activeId === overId) return;
+
+    // Find source day
+    const sourceDayIdx = itinerary.days.findIndex((d) =>
+      d.visits.some((v) => v.place.id === activeId)
+    );
+    if (sourceDayIdx === -1) return;
+
+    // Find target day — overId is either a place.id or `day-N`
+    let targetDayIdx = itinerary.days.findIndex((d) =>
+      d.visits.some((v) => v.place.id === overId)
+    );
+    if (targetDayIdx === -1) {
+      const m = overId.match(/^day-(\d+)$/);
+      if (m) {
+        const num = parseInt(m[1], 10);
+        targetDayIdx = itinerary.days.findIndex((d) => d.day_number === num);
+      }
+    }
+    if (targetDayIdx === -1) return;
+
+    // Deep-copy days so state updates are clean
+    const days = itinerary.days.map((d) => ({ ...d, visits: [...d.visits] }));
+
+    if (sourceDayIdx === targetDayIdx) {
+      // Same-day reorder
+      const day = days[sourceDayIdx];
+      const oldIdx = day.visits.findIndex((v) => v.place.id === activeId);
+      const newIdx = day.visits.findIndex((v) => v.place.id === overId);
+      if (oldIdx === -1 || newIdx === -1) return;
+      days[sourceDayIdx].visits = arrayMove(day.visits, oldIdx, newIdx);
+    } else {
+      // Cross-day move: remove from source, insert into target before overId
+      const visitToMove = days[sourceDayIdx].visits.find((v) => v.place.id === activeId)!;
+      days[sourceDayIdx].visits = days[sourceDayIdx].visits.filter(
+        (v) => v.place.id !== activeId
+      );
+
+      const overIdx = days[targetDayIdx].visits.findIndex((v) => v.place.id === overId);
+      const insertAt = overIdx === -1 ? days[targetDayIdx].visits.length : overIdx;
+      days[targetDayIdx].visits.splice(insertAt, 0, visitToMove);
+    }
+
+    persist({ ...itinerary, days });
   }
 
   function handleDwellChange(dayNumber: number, placeId: string, minutes: number) {
@@ -82,8 +143,7 @@ export default function ResultsPage() {
           : d
       ),
     };
-    setItinerary(updated);
-    sessionStorage.setItem(`itinerary-${params.id}`, JSON.stringify(updated));
+    persist(updated);
   }
 
   async function handleShare() {
@@ -177,17 +237,22 @@ export default function ResultsPage() {
             </div>
           )}
 
-          {/* Days */}
-          {itinerary.days.map((day) => (
-            <DaySection
-              key={day.day_number}
-              day={day}
-              start_date={itinerary.start_date ?? undefined}
-              isEstimated={isEstimated}
-              onReorder={handleReorder}
-              onDwellChange={handleDwellChange}
-            />
-          ))}
+          {/* Days — single DndContext covers all days for cross-day drag */}
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCorners}
+            onDragEnd={handleDragEnd}
+          >
+            {itinerary.days.map((day) => (
+              <DaySection
+                key={day.day_number}
+                day={day}
+                start_date={itinerary.start_date ?? undefined}
+                isEstimated={isEstimated}
+                onDwellChange={handleDwellChange}
+              />
+            ))}
+          </DndContext>
         </main>
       </div>
 

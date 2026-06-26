@@ -1,22 +1,11 @@
 "use client";
 
-import { useState } from "react";
-import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  DragEndEvent,
-} from "@dnd-kit/core";
 import {
   SortableContext,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
   useSortable,
-  arrayMove,
+  verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
+import { useDroppable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical } from "lucide-react";
 import type { Day, Visit } from "@/types";
@@ -27,7 +16,6 @@ interface DaySectionProps {
   day: Day;
   start_date?: string;
   isEstimated?: boolean;
-  onReorder?: (dayNumber: number, newVisits: Visit[]) => void;
   onDwellChange?: (dayNumber: number, placeId: string, minutes: number) => void;
   readonly?: boolean;
 }
@@ -55,8 +43,11 @@ function SortableVisit({
   return (
     <div
       ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
-      data-dragging={isDragging}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+        opacity: isDragging ? 0.4 : 1,
+      }}
     >
       <div className="flex items-start gap-1">
         {!readonly && (
@@ -85,29 +76,16 @@ function SortableVisit({
   );
 }
 
-export function DaySection({ day, start_date, isEstimated, onReorder, onDwellChange, readonly }: DaySectionProps) {
-  const [visits, setVisits] = useState<Visit[]>(day.visits);
+export function DaySection({ day, start_date, isEstimated, onDwellChange, readonly }: DaySectionProps) {
   const color = DAY_COLORS[(day.day_number - 1) % DAY_COLORS.length];
 
   const startDay = start_date
     ? new Date(start_date + 'T12:00:00').getDay()
     : new Date().getDay();
 
-  const sensors = useSensors(
-    useSensor(PointerSensor),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
-  );
-
-  function handleDragEnd(event: DragEndEvent) {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-
-    const oldIdx = visits.findIndex((v) => v.place.id === active.id);
-    const newIdx = visits.findIndex((v) => v.place.id === over.id);
-    const reordered = arrayMove(visits, oldIdx, newIdx);
-    setVisits(reordered);
-    onReorder?.(day.day_number, reordered);
-  }
+  // Droppable zone for the entire day (catches drops on empty days or between items)
+  const droppableId = `day-${day.day_number}`;
+  const { setNodeRef, isOver } = useDroppable({ id: droppableId });
 
   return (
     <section className="mb-8">
@@ -122,21 +100,37 @@ export function DaySection({ day, start_date, isEstimated, onReorder, onDwellCha
         <div>
           <h2 className="font-semibold text-foreground">第 {day.day_number} 天</h2>
           <p className="text-xs text-muted-foreground">
-            {visits.length} 個景點 · 移動約 {day.total_travel_minutes} 分鐘
+            {day.visits.length} 個景點 · 移動約 {day.total_travel_minutes} 分鐘
           </p>
         </div>
       </div>
 
       {/* Sortable visits */}
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+      <div
+        ref={setNodeRef}
+        className={
+          day.visits.length === 0
+            ? `min-h-14 rounded-lg border-2 border-dashed transition-colors ${
+                isOver ? "border-accent bg-accent/5" : "border-border"
+              } flex items-center justify-center`
+            : ""
+        }
+      >
+        {day.visits.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            {isOver ? "放在這裡" : "（無景點）"}
+          </p>
+        )}
+
         <SortableContext
-          items={visits.map((v) => v.place.id)}
+          items={day.visits.map((v) => v.place.id)}
           strategy={verticalListSortingStrategy}
         >
-          {visits.map((visit, i) => {
+          {day.visits.map((visit, i) => {
             const dayIndex = (startDay + 6 + (day.day_number - 1)) % 7;
-            const openingHoursText = visit.place.weekday_descriptions?.[dayIndex]
-              ?.replace(/^[^:]+:\s*/, '') ?? null;
+            const openingHoursText =
+              visit.place.weekday_descriptions?.[dayIndex]
+                ?.replace(/^[^:]+:\s*/, '') ?? null;
 
             return (
               <SortableVisit
@@ -156,7 +150,7 @@ export function DaySection({ day, start_date, isEstimated, onReorder, onDwellCha
             );
           })}
         </SortableContext>
-      </DndContext>
+      </div>
     </section>
   );
 }
