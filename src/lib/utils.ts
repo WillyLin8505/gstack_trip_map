@@ -83,8 +83,11 @@ export function overstayWarningForVisit(
     const closeMins = period.close.hour * 60 + period.close.minute;
     const spansMiddnight = period.close.day !== period.open.day;
     const effectiveClose = spansMiddnight ? closeMins + 24 * 60 : closeMins;
-    // A departure before open-time in a midnight-spanning period is in the next-day cycle
-    const effectiveDep = spansMiddnight && depMins < openMins ? depMins + 24 * 60 : depMins;
+    // Early-morning departure (before noon) on a midnight-spanning period = next-day cycle.
+    // Afternoon departure before opening is just before-open, not an overstay.
+    const effectiveDep = (spansMiddnight && depMins < openMins && depMins < 12 * 60)
+      ? depMins + 24 * 60
+      : depMins;
     if (effectiveDep > effectiveClose) return true;
   }
   return false;

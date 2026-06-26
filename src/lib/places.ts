@@ -32,7 +32,7 @@ interface GooglePlace {
 function mapToUserCategory(primaryType: string | undefined): UserCategory {
   if (!primaryType) return "景點";
   const t = primaryType.toLowerCase();
-  if (/restaurant|food|dining|izakaya|sushi|ramen|bbq|bar|pub|bistro|eatery|diner|buffet|steak|pizza|burger|japanese_restaurant|chinese_restaurant|korean_restaurant|american_restaurant|italian_restaurant|thai_restaurant|vietnamese_restaurant|indian_restaurant|french_restaurant|seafood_restaurant|vegetarian_restaurant|vegan_restaurant|fast_food_restaurant/.test(t)) return "餐廳";
+  if (/restaurant|meal_takeaway|meal_delivery|food|dining|izakaya|sushi|ramen|bbq|bar|pub|bistro|eatery|diner|buffet|steak|pizza|burger/.test(t)) return "餐廳";
   if (/bakery|cafe|coffee|dessert|ice_cream|sweet|pastry|tea|bubble_tea|snack|candy|confectionery/.test(t)) return "點心";
   return "景點";
 }

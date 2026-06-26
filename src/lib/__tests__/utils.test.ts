@@ -50,6 +50,12 @@ describe("overstayWarningForVisit", () => {
     expect(overstayWarningForVisit(hours, 5, "02:30")).toBe(true);
   });
 
+  it("returns false for afternoon departure before midnight-spanning opening", () => {
+    // Night market opens 16:00, closes next-day 00:00 → departure 15:08 (before open) should NOT warn
+    const hours = makeHours(4, 16, 0, 5, 0, 0);
+    expect(overstayWarningForVisit(hours, 4, "15:08")).toBe(false);
+  });
+
   it("returns false when period has no close (open 24h)", () => {
     const hours: OpeningHours = {
       open_now: null,
