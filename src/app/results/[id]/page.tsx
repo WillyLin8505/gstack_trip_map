@@ -6,14 +6,19 @@ import { Share2, ArrowLeft, Loader2, AlertCircle, CheckCircle2 } from "lucide-re
 import {
   DndContext,
   DragEndEvent,
+  DragStartEvent,
+  DragOverlay,
   closestCorners,
   PointerSensor,
   KeyboardSensor,
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
+import { GripVertical } from "lucide-react";
+import { DAY_COLORS } from "@/lib/constants";
+import { PlaceCard } from "@/components/PlaceCard";
 import { sortableKeyboardCoordinates, arrayMove } from "@dnd-kit/sortable";
-import type { ScheduledItinerary, UserCategory } from "@/types";
+import type { ScheduledItinerary, UserCategory, Visit } from "@/types";
 import { addMinutes, overstayWarningForVisit } from "@/lib/utils";
 import { TRAVEL_BUFFER_MINUTES } from "@/lib/constants";
 import { DaySection } from "@/components/DaySection";
@@ -30,6 +35,7 @@ export default function ResultsPage() {
 
   const [isEstimated, setIsEstimated] = useState(false);
   const [clampedToast, setClampedToast] = useState<string | null>(null);
+  const [activeVisit, setActiveVisit] = useState<{ visit: Visit; dayColor: string } | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -75,7 +81,23 @@ export default function ResultsPage() {
     sessionStorage.setItem(`itinerary-${params.id}`, JSON.stringify(updated));
   }
 
+  function handleDragStart(event: DragStartEvent) {
+    if (!itinerary) return;
+    const id = event.active.id as string;
+    for (const day of itinerary.days) {
+      const visit = day.visits.find((v) => v.place.id === id);
+      if (visit) {
+        setActiveVisit({
+          visit,
+          dayColor: DAY_COLORS[(day.day_number - 1) % DAY_COLORS.length],
+        });
+        return;
+      }
+    }
+  }
+
   function handleDragEnd(event: DragEndEvent) {
+    setActiveVisit(null);
     if (!itinerary) return;
     const { active, over } = event;
     if (!over) return;
@@ -303,6 +325,7 @@ export default function ResultsPage() {
           <DndContext
             sensors={sensors}
             collisionDetection={closestCorners}
+            onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
           >
             {itinerary.days.map((day) => (
@@ -316,6 +339,24 @@ export default function ResultsPage() {
                 onLockToggle={handleLockToggle}
               />
             ))}
+            <DragOverlay dropAnimation={null}>
+              {activeVisit && (
+                <div className="flex items-start gap-1 shadow-xl rounded-lg bg-background/90 backdrop-blur-sm ring-1 ring-accent/30 cursor-grabbing">
+                  <div className="mt-2 p-1 text-muted-foreground">
+                    <GripVertical className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1">
+                    <PlaceCard
+                      visit={activeVisit.visit}
+                      dayColor={activeVisit.dayColor}
+                      position={1}
+                      openingHoursText={null}
+                      readonly
+                    />
+                  </div>
+                </div>
+              )}
+            </DragOverlay>
           </DndContext>
         </main>
       </div>
