@@ -1,6 +1,6 @@
 import type { Place, Day, Visit, ScheduledItinerary } from "@/types";
 import { DAY_COLORS, DAY_MINUTES, TRAVEL_BUFFER_MINUTES } from "./constants";
-import { addMinutes, travelMinutes } from "./utils";
+import { addMinutes, travelMinutes, openingWarningForVisit } from "./utils";
 import { v4 as uuidv4 } from "uuid";
 
 // k-means++ with fixed seed for deterministic output
@@ -126,13 +126,19 @@ function twoOpt(places: Place[]): Place[] {
 function scheduleDay(
   places: Place[],
   dayNumber: number,
-  startTime: string
+  startTime: string,
+  startDate?: string,
 ): Day {
   const ordered = twoOpt(nearestNeighbor(places));
   let currentTime = startTime;
   const visits: Visit[] = [];
   let totalTravel = 0;
   let totalDwell = 0;
+
+  const startDayOfWeek = startDate
+    ? new Date(startDate + 'T12:00:00').getDay()
+    : new Date().getDay();
+  const visitDayOfWeek = (startDayOfWeek + 6 + (dayNumber - 1)) % 7;
 
   ordered.forEach((place, i) => {
     const travel = i === 0
@@ -145,7 +151,7 @@ function scheduleDay(
 
     const arrival = currentTime;
     const departure = addMinutes(currentTime, place.dwell_minutes);
-    const openingWarning = isClosedDuringVisit(place, arrival, departure);
+    const openingWarning = openingWarningForVisit(place.weekday_descriptions, visitDayOfWeek, arrival);
 
     visits.push({
       place,
@@ -169,12 +175,6 @@ function scheduleDay(
   };
 }
 
-function isClosedDuringVisit(place: Place, arrival: string, departure: string): boolean {
-  if (!place.opening_hours?.periods?.length) return false;
-  // Simplified check: if open_now is known false, flag it
-  if (place.opening_hours.open_now === false) return true;
-  return false;
-}
 
 export function optimize(
   places: Place[],
@@ -192,7 +192,7 @@ export function optimize(
 
   const days: Day[] = clusters.map((cluster, di) => {
     const clusterPlaces = cluster.map((i) => places[i]);
-    return scheduleDay(clusterPlaces, di + 1, startTime);
+    return scheduleDay(clusterPlaces, di + 1, startTime, startDate);
   });
 
   return {

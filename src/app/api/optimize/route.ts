@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
     let finalDays = itinerary.days;
     let isEstimated = false;
     try {
-      const refined = await refineTravelTimes(itinerary.days);
+      const refined = await refineTravelTimes(itinerary.days, "walking", start_date);
       finalDays = refined.days;
       isEstimated = refined.isEstimated;
     } catch {

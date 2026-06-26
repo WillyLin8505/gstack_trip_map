@@ -35,6 +35,38 @@ export function haversineKm(
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+export function openingWarningForVisit(
+  weekdayDescriptions: string[] | null | undefined,
+  visitDayOfWeek: number,
+  arrivalHhmm: string,
+): boolean {
+  const weekdayText = weekdayDescriptions?.[visitDayOfWeek];
+  if (!weekdayText) return false;
+
+  const hoursText = weekdayText.replace(/^[^:]+:\s*/, '');
+  if (/open 24/i.test(hoursText)) return false;
+  if (/closed/i.test(hoursText)) return true;
+
+  const m = hoursText.match(/(\d+):(\d+)\s*(AM|PM)[^–\-]*[–\-]\s*(\d+):(\d+)\s*(AM|PM)/i);
+  if (!m) return false;
+
+  const toMins = (h: string, min: string, ampm: string) => {
+    let hours = parseInt(h, 10);
+    const mins = parseInt(min, 10);
+    if (ampm.toUpperCase() === 'PM' && hours !== 12) hours += 12;
+    if (ampm.toUpperCase() === 'AM' && hours === 12) hours = 0;
+    return hours * 60 + mins;
+  };
+
+  const openMins = toMins(m[1], m[2], m[3]);
+  let closeMins = toMins(m[4], m[5], m[6]);
+  if (closeMins <= openMins) closeMins += 24 * 60;
+
+  const [ah, am] = arrivalHhmm.split(':').map(Number);
+  const arrivalMins = ah * 60 + am;
+  return arrivalMins < openMins || arrivalMins >= closeMins;
+}
+
 // Walking/transit estimate: ~15 min/km baseline
 export function travelMinutes(
   lat1: number, lng1: number,

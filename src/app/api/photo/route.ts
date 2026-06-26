@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     const { status, contentType, buffer } = await httpsGet(url);
     if (status < 200 || status >= 300) return new NextResponse('Photo fetch failed', { status });
 
-    return new NextResponse(buffer, {
+    return new NextResponse(new Uint8Array(buffer), {
       headers: {
         'Content-Type': contentType,
         'Cache-Control': 'public, max-age=86400',

@@ -3,7 +3,7 @@ import 'server-only';
 import pLimit from "p-limit";
 import type { Place, Day } from "@/types";
 import { DEFAULT_DWELL_MINUTES, TRAVEL_BUFFER_MINUTES } from "./constants";
-import { travelMinutes, addMinutes } from "@/lib/utils";
+import { travelMinutes, addMinutes, openingWarningForVisit } from "@/lib/utils";
 
 const PLACES_API_BASE = "https://places.googleapis.com/v1";
 const limit = pLimit(5);
@@ -126,10 +126,14 @@ async function directionsTime(
 }
 
 export async function refineTravelTimes(
-  days: Day[], mode = "walking"
+  days: Day[], mode = "walking", startDate?: string
 ): Promise<{ days: Day[]; isEstimated: boolean }> {
   try {
     let anyEstimated = false;
+    const startDayOfWeek = startDate
+      ? new Date(startDate + 'T12:00:00').getDay()
+      : new Date().getDay();
+
     const updatedDays = await Promise.all(days.map(async (day) => {
       if (day.visits.length < 2) return day;
       const results = await Promise.all(
@@ -147,6 +151,7 @@ export async function refineTravelTimes(
         if (estimated) anyEstimated = true;
         newVisits[i + 1] = { ...newVisits[i + 1], travel_minutes_from_prev: minutes };
       }
+      const visitDayOfWeek = (startDayOfWeek + 6 + (day.day_number - 1)) % 7;
       for (let i = 1; i < newVisits.length; i++) {
         const prev = newVisits[i - 1];
         const arrival = addMinutes(prev.departure_time, newVisits[i].travel_minutes_from_prev + TRAVEL_BUFFER_MINUTES);
@@ -155,7 +160,7 @@ export async function refineTravelTimes(
           ...newVisits[i],
           arrival_time: arrival,
           departure_time: departure,
-          opening_warning: newVisits[i].place.opening_hours?.open_now === false,
+          opening_warning: openingWarningForVisit(newVisits[i].place.weekday_descriptions, visitDayOfWeek, arrival),
         };
       }
       return {
