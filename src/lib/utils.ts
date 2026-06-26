@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import type { OpeningHours } from "@/types";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -65,6 +66,28 @@ export function openingWarningForVisit(
   const [ah, am] = arrivalHhmm.split(':').map(Number);
   const arrivalMins = ah * 60 + am;
   return arrivalMins < openMins || arrivalMins >= closeMins;
+}
+
+export function overstayWarningForVisit(
+  openingHours: OpeningHours | null | undefined,
+  visitDayOfWeek: number,
+  departureHhmm: string,
+): boolean {
+  if (!openingHours?.periods?.length) return false;
+  const [dh, dm] = departureHhmm.split(':').map(Number);
+  const depMins = dh * 60 + dm;
+  const todayPeriods = openingHours.periods.filter(p => p.open.day === visitDayOfWeek);
+  for (const period of todayPeriods) {
+    if (!period.close) continue;
+    const openMins = period.open.hour * 60 + period.open.minute;
+    const closeMins = period.close.hour * 60 + period.close.minute;
+    const spansMiddnight = period.close.day !== period.open.day;
+    const effectiveClose = spansMiddnight ? closeMins + 24 * 60 : closeMins;
+    // A departure before open-time in a midnight-spanning period is in the next-day cycle
+    const effectiveDep = spansMiddnight && depMins < openMins ? depMins + 24 * 60 : depMins;
+    if (effectiveDep > effectiveClose) return true;
+  }
+  return false;
 }
 
 // Walking/transit estimate: ~15 min/km baseline

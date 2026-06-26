@@ -13,7 +13,9 @@ import {
   useSensors,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates, arrayMove } from "@dnd-kit/sortable";
-import type { ScheduledItinerary } from "@/types";
+import type { ScheduledItinerary, UserCategory } from "@/types";
+import { addMinutes, overstayWarningForVisit } from "@/lib/utils";
+import { TRAVEL_BUFFER_MINUTES } from "@/lib/constants";
 import { DaySection } from "@/components/DaySection";
 import { ItineraryMap } from "@/components/ItineraryMap";
 
@@ -128,6 +130,48 @@ export default function ResultsPage() {
 
   function handleDwellChange(dayNumber: number, placeId: string, minutes: number) {
     if (!itinerary) return;
+    const startDayOfWeek = itinerary.start_date
+      ? new Date(itinerary.start_date + 'T12:00:00').getDay()
+      : new Date().getDay();
+
+    const updated = {
+      ...itinerary,
+      days: itinerary.days.map((d) => {
+        if (d.day_number !== dayNumber) return d;
+        const visitDayOfWeek = (startDayOfWeek + 6 + (dayNumber - 1)) % 7;
+        const changedIdx = d.visits.findIndex((v) => v.place.id === placeId);
+        if (changedIdx === -1) return d;
+
+        const newVisits = [...d.visits];
+        const v = newVisits[changedIdx];
+        const newDeparture = addMinutes(v.arrival_time, minutes);
+        newVisits[changedIdx] = {
+          ...v,
+          place: { ...v.place, dwell_minutes: minutes },
+          departure_time: newDeparture,
+          overstay_warning: overstayWarningForVisit(v.place.opening_hours, visitDayOfWeek, newDeparture),
+        };
+
+        for (let i = changedIdx + 1; i < newVisits.length; i++) {
+          const prev = newVisits[i - 1];
+          const arrival = addMinutes(prev.departure_time, newVisits[i].travel_minutes_from_prev + TRAVEL_BUFFER_MINUTES);
+          const departure = addMinutes(arrival, newVisits[i].place.dwell_minutes);
+          newVisits[i] = {
+            ...newVisits[i],
+            arrival_time: arrival,
+            departure_time: departure,
+            overstay_warning: overstayWarningForVisit(newVisits[i].place.opening_hours, visitDayOfWeek, departure),
+          };
+        }
+
+        return { ...d, visits: newVisits };
+      }),
+    };
+    persist(updated);
+  }
+
+  function handleCategoryChange(dayNumber: number, placeId: string, category: UserCategory) {
+    if (!itinerary) return;
     const updated = {
       ...itinerary,
       days: itinerary.days.map((d) =>
@@ -136,8 +180,26 @@ export default function ResultsPage() {
               ...d,
               visits: d.visits.map((v) =>
                 v.place.id === placeId
-                  ? { ...v, place: { ...v.place, dwell_minutes: minutes } }
+                  ? { ...v, place: { ...v.place, user_category: category } }
                   : v
+              ),
+            }
+          : d
+      ),
+    };
+    persist(updated);
+  }
+
+  function handleLockToggle(dayNumber: number, placeId: string, locked: boolean) {
+    if (!itinerary) return;
+    const updated = {
+      ...itinerary,
+      days: itinerary.days.map((d) =>
+        d.day_number === dayNumber
+          ? {
+              ...d,
+              visits: d.visits.map((v) =>
+                v.place.id === placeId ? { ...v, locked } : v
               ),
             }
           : d
@@ -250,6 +312,8 @@ export default function ResultsPage() {
                 start_date={itinerary.start_date ?? undefined}
                 isEstimated={isEstimated}
                 onDwellChange={handleDwellChange}
+                onCategoryChange={handleCategoryChange}
+                onLockToggle={handleLockToggle}
               />
             ))}
           </DndContext>

@@ -1,10 +1,13 @@
+export type UserCategory = "餐廳" | "景點" | "點心";
+
 export interface Place {
   id: string;              // Google place_id
   name: string;
   address: string;
   lat: number;
   lng: number;
-  category: string;        // from primaryTypeDisplayName
+  category: string;        // from primaryTypeDisplayName (display label)
+  user_category?: UserCategory; // auto-mapped from primaryType, user-overridable
   price_level: 0 | 1 | 2 | 3 | 4 | null;
   rating: number | null;
   opening_hours: OpeningHours | null;
@@ -28,6 +31,8 @@ export interface Visit {
   departure_time: string;  // HH:MM
   travel_minutes_from_prev: number;
   opening_warning: boolean;
+  overstay_warning?: boolean;
+  locked?: boolean;
 }
 
 export interface Day {

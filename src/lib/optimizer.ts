@@ -1,6 +1,6 @@
 import type { Place, Day, Visit, ScheduledItinerary } from "@/types";
 import { DAY_COLORS, DAY_MINUTES, TRAVEL_BUFFER_MINUTES } from "./constants";
-import { addMinutes, travelMinutes, openingWarningForVisit } from "./utils";
+import { addMinutes, travelMinutes, openingWarningForVisit, overstayWarningForVisit } from "./utils";
 import { v4 as uuidv4 } from "uuid";
 
 // k-means++ with fixed seed for deterministic output
@@ -152,6 +152,7 @@ function scheduleDay(
     const arrival = currentTime;
     const departure = addMinutes(currentTime, place.dwell_minutes);
     const openingWarning = openingWarningForVisit(place.weekday_descriptions, visitDayOfWeek, arrival);
+    const overstayWarning = overstayWarningForVisit(place.opening_hours, visitDayOfWeek, departure);
 
     visits.push({
       place,
@@ -159,6 +160,7 @@ function scheduleDay(
       departure_time: departure,
       travel_minutes_from_prev: travel,
       opening_warning: openingWarning,
+      overstay_warning: overstayWarning,
     });
 
     totalTravel += travel;

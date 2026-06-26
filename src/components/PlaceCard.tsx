@@ -1,9 +1,22 @@
 "use client";
 
-import { Star, Clock, AlertTriangle, DoorOpen } from "lucide-react";
-import type { Visit } from "@/types";
+import { Star, Clock, AlertTriangle, DoorOpen, Lock, LockOpen } from "lucide-react";
+import type { Visit, UserCategory } from "@/types";
 import { formatTime } from "@/lib/utils";
 import { cn } from "@/lib/utils";
+
+const CATEGORIES: UserCategory[] = ["餐廳", "景點", "點心"];
+
+function nextCategory(current: UserCategory): UserCategory {
+  const idx = CATEGORIES.indexOf(current);
+  return CATEGORIES[(idx + 1) % CATEGORIES.length];
+}
+
+const categoryColors: Record<UserCategory, string> = {
+  餐廳: "bg-red-100 text-red-700",
+  景點: "bg-green-100 text-green-700",
+  點心: "bg-yellow-100 text-yellow-700",
+};
 
 interface PlaceCardProps {
   visit: Visit;
@@ -12,6 +25,8 @@ interface PlaceCardProps {
   openingHoursText?: string | null;
   isEstimated?: boolean;
   onDwellChange?: (minutes: number) => void;
+  onCategoryChange?: (category: UserCategory) => void;
+  onLockToggle?: (locked: boolean) => void;
   readonly?: boolean;
 }
 
@@ -22,9 +37,12 @@ export function PlaceCard({
   openingHoursText,
   isEstimated,
   onDwellChange,
+  onCategoryChange,
+  onLockToggle,
   readonly = false,
 }: PlaceCardProps) {
-  const { place, arrival_time, departure_time, travel_minutes_from_prev, opening_warning } = visit;
+  const { place, arrival_time, departure_time, travel_minutes_from_prev, opening_warning, overstay_warning, locked } = visit;
+  const userCategory: UserCategory = place.user_category ?? "景點";
 
   return (
     <div className="relative flex gap-3">
@@ -43,7 +61,8 @@ export function PlaceCard({
       <div
         className={cn(
           "flex-1 mb-4 rounded-lg border bg-white p-3.5 shadow-sm",
-          opening_warning ? "border-amber-300" : "border-border"
+          locked ? "border-l-2 border-l-blue-400 border-border" : "",
+          opening_warning && !locked ? "border-amber-300" : !locked ? "border-border" : ""
         )}
       >
         {/* Travel indicator */}
@@ -65,26 +84,55 @@ export function PlaceCard({
             )}
           </div>
 
-          {place.photo_url && (
-            <img
-              src={place.photo_url}
-              alt={place.name}
-              className="w-12 h-12 rounded-md object-cover shrink-0"
-            />
-          )}
+          <div className="flex items-start gap-1.5 shrink-0">
+            {place.photo_url && (
+              <img
+                src={place.photo_url}
+                alt={place.name}
+                className="w-12 h-12 rounded-md object-cover"
+              />
+            )}
+            {/* Lock toggle */}
+            {!readonly && onLockToggle && (
+              <button
+                onClick={() => onLockToggle(!locked)}
+                className={cn(
+                  "p-1 rounded transition-colors",
+                  locked
+                    ? "text-blue-500 hover:text-blue-700"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                title={locked ? "解除鎖定" : "鎖定到達時間"}
+                aria-label={locked ? `解除 ${place.name} 的鎖定` : `鎖定 ${place.name} 的到達時間`}
+              >
+                {locked ? <Lock className="w-4 h-4" /> : <LockOpen className="w-4 h-4" />}
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
           {/* Time */}
           <span className="flex items-center gap-1 text-muted-foreground">
             <Clock className="w-3 h-3" />
+            {locked && <Lock className="w-2.5 h-2.5 text-blue-400" />}
             {formatTime(arrival_time)} – {formatTime(departure_time)}
           </span>
 
-          {/* Category */}
-          <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
-            {place.category}
-          </span>
+          {/* Category badge — clickable */}
+          {!readonly && onCategoryChange ? (
+            <button
+              onClick={() => onCategoryChange(nextCategory(userCategory))}
+              className={cn("rounded-full px-2 py-0.5 font-medium transition-opacity hover:opacity-80", categoryColors[userCategory])}
+              title="點擊切換分類"
+            >
+              {userCategory}
+            </button>
+          ) : (
+            <span className={cn("rounded-full px-2 py-0.5 font-medium", categoryColors[userCategory])}>
+              {userCategory}
+            </span>
+          )}
 
           {/* Rating */}
           {place.rating && (
@@ -95,7 +143,7 @@ export function PlaceCard({
           )}
         </div>
 
-        {/* Opening hours + warning (combined block) */}
+        {/* Opening hours + warning */}
         {openingHoursText ? (
           <div
             className={cn(
@@ -116,6 +164,14 @@ export function PlaceCard({
             <span>請注意：此景點可能在您到訪時間尚未開放</span>
           </div>
         ) : null}
+
+        {/* Overstay warning */}
+        {overstay_warning && (
+          <div className="mt-1.5 flex items-center gap-1.5 text-xs text-orange-600">
+            <Clock className="w-3 h-3 shrink-0" />
+            <span>提醒：您的停留時間可能延伸至關門後</span>
+          </div>
+        )}
 
         {/* Dwell time editor */}
         {!readonly && onDwellChange && (

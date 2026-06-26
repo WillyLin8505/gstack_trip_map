@@ -1,9 +1,9 @@
 import 'server-only';
 
 import pLimit from "p-limit";
-import type { Place, Day } from "@/types";
+import type { Place, Day, UserCategory } from "@/types";
 import { DEFAULT_DWELL_MINUTES, TRAVEL_BUFFER_MINUTES } from "./constants";
-import { travelMinutes, addMinutes, openingWarningForVisit } from "@/lib/utils";
+import { travelMinutes, addMinutes, openingWarningForVisit, overstayWarningForVisit } from "@/lib/utils";
 
 const PLACES_API_BASE = "https://places.googleapis.com/v1";
 const limit = pLimit(5);
@@ -13,6 +13,7 @@ interface GooglePlace {
   displayName?: { text: string };
   formattedAddress?: string;
   location?: { latitude: number; longitude: number };
+  primaryType?: string;
   primaryTypeDisplayName?: { text: string };
   priceLevel?: string;
   rating?: number;
@@ -26,6 +27,14 @@ interface GooglePlace {
   };
   editorialSummary?: { text?: string };
   photos?: Array<{ name: string }>;
+}
+
+function mapToUserCategory(primaryType: string | undefined): UserCategory {
+  if (!primaryType) return "景點";
+  const t = primaryType.toLowerCase();
+  if (/restaurant|food|dining|izakaya|sushi|ramen|bbq|bar|pub|bistro|eatery|diner|buffet|steak|pizza|burger|japanese_restaurant|chinese_restaurant|korean_restaurant|american_restaurant|italian_restaurant|thai_restaurant|vietnamese_restaurant|indian_restaurant|french_restaurant|seafood_restaurant|vegetarian_restaurant|vegan_restaurant|fast_food_restaurant/.test(t)) return "餐廳";
+  if (/bakery|cafe|coffee|dessert|ice_cream|sweet|pastry|tea|bubble_tea|snack|candy|confectionery/.test(t)) return "點心";
+  return "景點";
 }
 
 function parsePriceLevel(level: string | undefined): 0 | 1 | 2 | 3 | 4 | null {
@@ -60,6 +69,7 @@ async function searchPlace(query: string, city: string): Promise<GooglePlace | n
         "places.displayName",
         "places.formattedAddress",
         "places.location",
+        "places.primaryType",
         "places.primaryTypeDisplayName",
         "places.priceLevel",
         "places.rating",
@@ -161,6 +171,7 @@ export async function refineTravelTimes(
           arrival_time: arrival,
           departure_time: departure,
           opening_warning: openingWarningForVisit(newVisits[i].place.weekday_descriptions, visitDayOfWeek, arrival),
+          overstay_warning: overstayWarningForVisit(newVisits[i].place.opening_hours, visitDayOfWeek, departure),
         };
       }
       return {
@@ -225,6 +236,7 @@ export async function resolvePlaces(
             lat: gp.location?.latitude ?? 0,
             lng: gp.location?.longitude ?? 0,
             category: gp.primaryTypeDisplayName?.text ?? "景點",
+            user_category: mapToUserCategory(gp.primaryType),
             price_level: parsePriceLevel(gp.priceLevel),
             rating: gp.rating ?? null,
             opening_hours: gp.regularOpeningHours

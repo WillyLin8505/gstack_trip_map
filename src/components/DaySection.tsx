@@ -8,7 +8,7 @@ import {
 import { useDroppable } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical } from "lucide-react";
-import type { Day, Visit } from "@/types";
+import type { Day, Visit, UserCategory } from "@/types";
 import { PlaceCard } from "./PlaceCard";
 import { DAY_COLORS } from "@/lib/constants";
 
@@ -17,6 +17,8 @@ interface DaySectionProps {
   start_date?: string;
   isEstimated?: boolean;
   onDwellChange?: (dayNumber: number, placeId: string, minutes: number) => void;
+  onCategoryChange?: (dayNumber: number, placeId: string, category: UserCategory) => void;
+  onLockToggle?: (dayNumber: number, placeId: string, locked: boolean) => void;
   readonly?: boolean;
 }
 
@@ -27,6 +29,8 @@ function SortableVisit({
   openingHoursText,
   isEstimated,
   onDwellChange,
+  onCategoryChange,
+  onLockToggle,
   readonly,
 }: {
   visit: Visit;
@@ -35,6 +39,8 @@ function SortableVisit({
   openingHoursText: string | null;
   isEstimated?: boolean;
   onDwellChange?: (minutes: number) => void;
+  onCategoryChange?: (category: UserCategory) => void;
+  onLockToggle?: (locked: boolean) => void;
   readonly?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
@@ -68,6 +74,8 @@ function SortableVisit({
             openingHoursText={openingHoursText}
             isEstimated={isEstimated}
             onDwellChange={onDwellChange}
+            onCategoryChange={onCategoryChange}
+            onLockToggle={onLockToggle}
             readonly={readonly}
           />
         </div>
@@ -76,7 +84,7 @@ function SortableVisit({
   );
 }
 
-export function DaySection({ day, start_date, isEstimated, onDwellChange, readonly }: DaySectionProps) {
+export function DaySection({ day, start_date, isEstimated, onDwellChange, onCategoryChange, onLockToggle, readonly }: DaySectionProps) {
   const color = DAY_COLORS[(day.day_number - 1) % DAY_COLORS.length];
 
   const startDay = start_date
@@ -143,6 +151,16 @@ export function DaySection({ day, start_date, isEstimated, onDwellChange, readon
                 onDwellChange={
                   onDwellChange
                     ? (mins) => onDwellChange(day.day_number, visit.place.id, mins)
+                    : undefined
+                }
+                onCategoryChange={
+                  onCategoryChange
+                    ? (cat) => onCategoryChange(day.day_number, visit.place.id, cat)
+                    : undefined
+                }
+                onLockToggle={
+                  onLockToggle
+                    ? (locked) => onLockToggle(day.day_number, visit.place.id, locked)
                     : undefined
                 }
                 readonly={readonly}
