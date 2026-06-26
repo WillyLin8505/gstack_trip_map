@@ -7,7 +7,8 @@ export async function GET(req: NextRequest) {
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
   if (!apiKey) return new NextResponse('Server misconfigured', { status: 500 });
 
-  const url = `https://places.googleapis.com/v1/${encodeURIComponent(photoRef)}/media?maxWidthPx=800&key=${apiKey}`;
+  if (photoRef.includes('..') || photoRef.startsWith('/')) return new NextResponse('Invalid ref', { status: 400 });
+  const url = `https://places.googleapis.com/v1/${photoRef}/media?maxWidthPx=800&key=${apiKey}`;
   const res = await fetch(url);
   if (!res.ok) return new NextResponse('Photo fetch failed', { status: res.status });
 
