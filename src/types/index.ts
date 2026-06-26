@@ -66,6 +66,7 @@ export interface OptimizeRequest {
   city: string;
   start_date?: string;
   start_time?: string;
+  num_days?: number;
 }
 
 export interface OptimizeResponse {

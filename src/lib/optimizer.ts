@@ -180,11 +180,14 @@ export function optimize(
   places: Place[],
   city: string,
   startDate?: string,
-  startTime = "09:00"
+  startTime = "09:00",
+  numDays?: number
 ): ScheduledItinerary {
   const totalDwell = places.reduce((s, p) => s + p.dwell_minutes, 0);
   const travelEstimate = (places.length - 1) * TRAVEL_BUFFER_MINUTES;
-  const k = Math.max(1, Math.ceil((totalDwell + travelEstimate) / DAY_MINUTES));
+  const k = numDays
+    ? Math.min(numDays, places.length)
+    : Math.max(1, Math.ceil((totalDwell + travelEstimate) / DAY_MINUTES));
 
   const rand = seededRand(42);
   const points: Point[] = places.map((p, i) => ({ lat: p.lat, lng: p.lng, idx: i }));

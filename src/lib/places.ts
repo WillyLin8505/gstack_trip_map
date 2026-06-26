@@ -175,18 +175,38 @@ export async function refineTravelTimes(
   }
 }
 
+function extractCity(formattedAddress: string): string | null {
+  const parts = formattedAddress.split(',').map(s => s.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  const candidate = parts[parts.length - 2] ?? null;
+  if (!candidate) return null;
+  return candidate.replace(/\s+[\d][\d-]+$/, '').trim() || null;
+}
+
 export async function resolvePlaces(
   names: string[],
   city: string
-): Promise<{ places: Place[]; warnings: string[] }> {
+): Promise<{ places: Place[]; warnings: string[]; detectedCity: string }> {
   const warnings: string[] = [];
   const seen = new Set<string>();
+
+  // Auto-detect city from the first resolvable place if none provided
+  let detectedCity = city;
+  if (!city) {
+    for (const name of names) {
+      const gp = await searchPlace(name, "");
+      if (gp?.formattedAddress) {
+        const extracted = extractCity(gp.formattedAddress);
+        if (extracted) { detectedCity = extracted; break; }
+      }
+    }
+  }
 
   const results = await Promise.all(
     names.map((name) =>
       limit(async () => {
         try {
-          const gp = await searchPlace(name, city);
+          const gp = await searchPlace(name, detectedCity);
           if (!gp) {
             warnings.push(`找不到「${name}」，已略過`);
             return null;
@@ -235,5 +255,6 @@ export async function resolvePlaces(
   return {
     places: results.filter((p): p is Place => p !== null),
     warnings,
+    detectedCity,
   };
 }

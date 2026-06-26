@@ -22,8 +22,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { places, warnings } = await resolvePlaces(names, city ?? "");
-    return NextResponse.json({ places, warnings });
+    const { places, warnings, detectedCity } = await resolvePlaces(names, city ?? "");
+    return NextResponse.json({ places, warnings, detectedCity });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal error";
     console.error("[api/resolve]", err);

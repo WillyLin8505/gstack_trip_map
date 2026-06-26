@@ -6,7 +6,7 @@ import type { Place } from "@/types";
 
 export async function POST(req: NextRequest) {
   try {
-    const { places, city, start_date, start_time } = await req.json();
+    const { places, city, start_date, start_time, num_days } = await req.json();
 
     if (!Array.isArray(places) || places.length === 0) {
       return NextResponse.json({ error: "places is required" }, { status: 400 });
@@ -16,11 +16,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Too many places' }, { status: 400 });
     }
 
+    if (num_days !== undefined && (!Number.isInteger(num_days) || num_days < 1)) {
+      return NextResponse.json({ error: "num_days must be a positive integer" }, { status: 400 });
+    }
+
     const itinerary = optimize(
       places as Place[],
       city ?? "",
       start_date,
-      start_time
+      start_time,
+      num_days
     );
 
     let finalDays = itinerary.days;

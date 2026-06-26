@@ -5,13 +5,20 @@ import { useRouter } from "next/navigation";
 import { MapPin, Loader2, AlertCircle } from "lucide-react";
 import { MAX_PLACES_PER_REQUEST } from "@/lib/constants";
 
+const DAY_OPTIONS = [1, 2, 3, 4, 5, 6, 7] as const;
+
 export default function HomePage() {
   const router = useRouter();
   const [placeList, setPlaceList] = useState("");
-  const [city, setCity] = useState("");
   const [startDate, setStartDate] = useState("");
+  const [numDays, setNumDays] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // D5 city fallback (when all places fail to resolve)
+  const [showCityFallback, setShowCityFallback] = useState(false);
+  const [fallbackCity, setFallbackCity] = useState("");
+
   const submitRef = useRef(false);
 
   const placeCount = placeList
@@ -19,74 +26,101 @@ export default function HomePage() {
     .map((l) => l.trim())
     .filter(Boolean).length;
 
+  async function runFlow(placeListText: string, city: string) {
+    const names = placeListText
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    if (names.length === 0) {
+      setError("請輸入至少一個景點");
+      return;
+    }
+    if (names.length > MAX_PLACES_PER_REQUEST) {
+      setError(`最多支援 ${MAX_PLACES_PER_REQUEST} 個景點`);
+      return;
+    }
+
+    // Step 1: resolve places (auto-detect city if none provided)
+    const resolveRes = await fetch("/api/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ place_list: placeListText, city }),
+    });
+
+    if (!resolveRes.ok) {
+      const err = await resolveRes.json().catch(() => ({}));
+      throw new Error(err.error ?? "解析景點時發生錯誤");
+    }
+
+    const { places, warnings, detectedCity } = await resolveRes.json();
+
+    if (places.length === 0) {
+      setShowCityFallback(true);
+      setError("找不到任何景點，請輸入城市名稱協助搜尋");
+      return;
+    }
+
+    // Step 2: optimize into days
+    const optimizeRes = await fetch("/api/optimize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        places,
+        city: detectedCity ?? city,
+        start_date: startDate || undefined,
+        ...(numDays !== undefined && { num_days: numDays }),
+      }),
+    });
+
+    if (!optimizeRes.ok) {
+      const err = await optimizeRes.json().catch(() => ({}));
+      throw new Error(err.error ?? "規劃行程時發生錯誤");
+    }
+
+    const { itinerary, isEstimated } = await optimizeRes.json();
+
+    if (warnings?.length) {
+      sessionStorage.setItem(`warnings-${itinerary.id}`, JSON.stringify(warnings));
+    }
+    if (numDays !== undefined) {
+      sessionStorage.setItem(`requestedNumDays-${itinerary.id}`, String(numDays));
+    }
+    sessionStorage.setItem(`itinerary-${itinerary.id}`, JSON.stringify(itinerary));
+    sessionStorage.setItem(`isEstimated-${itinerary.id}`, JSON.stringify(isEstimated ?? false));
+
+    router.push(`/results/${itinerary.id}`);
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (submitRef.current || loading) return;
     submitRef.current = true;
     setLoading(true);
     setError(null);
+    setShowCityFallback(false);
 
     try {
-      const names = placeList
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean);
-
-      if (names.length === 0) {
-        setError("請輸入至少一個景點");
-        return;
-      }
-      if (names.length > MAX_PLACES_PER_REQUEST) {
-        setError(`最多支援 ${MAX_PLACES_PER_REQUEST} 個景點`);
-        return;
-      }
-
-      // Step 1: resolve place names to coordinates
-      const resolveRes = await fetch("/api/resolve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ place_list: placeList, city }),
-      });
-
-      if (!resolveRes.ok) {
-        const err = await resolveRes.json().catch(() => ({}));
-        throw new Error(err.error ?? "解析景點時發生錯誤");
-      }
-
-      const { places, warnings } = await resolveRes.json();
-
-      if (places.length === 0) {
-        setError("找不到任何景點，請確認輸入是否正確");
-        return;
-      }
-
-      // Step 2: optimize into days
-      const optimizeRes = await fetch("/api/optimize", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ places, city, start_date: startDate || undefined }),
-      });
-
-      if (!optimizeRes.ok) {
-        const err = await optimizeRes.json().catch(() => ({}));
-        throw new Error(err.error ?? "規劃行程時發生錯誤");
-      }
-
-      const { itinerary, isEstimated } = await optimizeRes.json();
-
-      // Pass warnings via sessionStorage for the results page
-      if (warnings?.length) {
-        sessionStorage.setItem(`warnings-${itinerary.id}`, JSON.stringify(warnings));
-      }
-      sessionStorage.setItem(`itinerary-${itinerary.id}`, JSON.stringify(itinerary));
-      sessionStorage.setItem(`isEstimated-${itinerary.id}`, JSON.stringify(isEstimated ?? false));
-
-      router.push(`/results/${itinerary.id}`);
+      await runFlow(placeList, "");
     } catch (err) {
       setError(err instanceof Error ? err.message : "發生未知錯誤");
     } finally {
       setLoading(false);
       submitRef.current = false;
+    }
+  }
+
+  async function handleRetryWithCity() {
+    if (!fallbackCity.trim() || loading) return;
+    setLoading(true);
+    setError(null);
+
+    try {
+      await runFlow(placeList, fallbackCity.trim());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "發生未知錯誤");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -134,26 +168,40 @@ export default function HomePage() {
             )}
           </div>
 
-          {/* City */}
+          {/* Days chips */}
           <div>
-            <label
-              htmlFor="city"
-              className="block text-sm font-medium text-foreground mb-1.5"
-            >
-              城市
-              <span className="ml-2 text-xs text-muted-foreground font-normal">
-                選填，提升搜尋精準度
-              </span>
+            <label className="block text-sm font-medium text-foreground mb-2">
+              行程天數
             </label>
-            <input
-              id="city"
-              type="text"
-              value={city}
-              onChange={(e) => setCity(e.target.value)}
-              placeholder="台北"
-              className="w-full rounded-lg border border-border bg-white px-3.5 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-accent"
-              disabled={loading}
-            />
+            <div className="flex gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => setNumDays(undefined)}
+                className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+                  numDays === undefined
+                    ? "bg-accent text-white border-accent"
+                    : "bg-white text-muted-foreground border-border hover:border-accent hover:text-accent"
+                }`}
+                disabled={loading}
+              >
+                自動
+              </button>
+              {DAY_OPTIONS.map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setNumDays(n)}
+                  className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
+                    numDays === n
+                      ? "bg-accent text-white border-accent"
+                      : "bg-white text-muted-foreground border-border hover:border-accent hover:text-accent"
+                  }`}
+                  disabled={loading}
+                >
+                  {n}天
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Start date */}
@@ -182,6 +230,34 @@ export default function HomePage() {
             <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-3.5 py-3 text-sm text-red-700">
               <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
               <span>{error}</span>
+            </div>
+          )}
+
+          {/* D5 city fallback */}
+          {showCityFallback && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 space-y-3">
+              <p className="text-sm text-amber-800 font-medium">
+                請輸入旅遊城市以協助搜尋
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={fallbackCity}
+                  onChange={(e) => setFallbackCity(e.target.value)}
+                  placeholder="例：台北、東京、曼谷"
+                  className="flex-1 rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  disabled={loading}
+                  onKeyDown={(e) => e.key === "Enter" && handleRetryWithCity()}
+                />
+                <button
+                  type="button"
+                  onClick={handleRetryWithCity}
+                  disabled={loading || !fallbackCity.trim()}
+                  className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                >
+                  {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : "重新搜尋"}
+                </button>
+              </div>
             </div>
           )}
 
